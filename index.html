@@ -1,0 +1,301 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZenTarot 3D - 视觉手势引擎</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&display=swap');
+        body { margin: 0; overflow: hidden; background: #010103; color: white; font-family: 'Inter', sans-serif; }
+        #canvas-container { position: absolute; width: 100%; height: 100%; }
+        .ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        .ui-overlay * { pointer-events: auto; }
+        
+        #video-container { 
+            position: fixed; 
+            bottom: 24px; 
+            left: 24px; 
+            width: 160px; 
+            height: 120px; 
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 20px;
+            overflow: hidden;
+            background: #000;
+            transform: scaleX(-1);
+            z-index: 5;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+        }
+        #video-feed { width: 100%; height: 100%; object-fit: cover; opacity: 0.4; filter: grayscale(1); }
+
+        .glass-panel {
+            background: rgba(8, 8, 12, 0.3);
+            backdrop-filter: blur(25px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .fade-in { animation: fadeIn 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(30px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+        .gesture-badge {
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            border-radius: 10px;
+            font-size: 0.65rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        
+        .gesture-active { background: #4f46e5; color: white; box-shadow: 0 0 25px rgba(79, 70, 229, 0.6); transform: scale(1.1); }
+        .gesture-inactive { background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.15); }
+
+        #interaction-hint {
+            transition: all 0.5s ease;
+            text-shadow: 0 0 20px rgba(79, 70, 229, 0.4);
+        }
+
+        #splash-screen {
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(circle at center, #0a0a14 0%, #010103 100%);
+            transition: opacity 1s ease;
+        }
+
+        #debug-stats {
+            position: fixed;
+            top: 24px;
+            right: 200px;
+            font-family: monospace;
+            font-size: 9px;
+            color: rgba(255,255,255,0.2);
+            pointer-events: none;
+            text-align: right;
+            line-height: 1.4;
+        }
+
+        #music-toggle-btn {
+            pointer-events: auto;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+        #music-toggle-btn:active { transform: scale(0.85); }
+
+        /* Detail Modal Styling */
+        #detail-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.9);
+            backdrop-filter: blur(40px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.5s ease;
+        }
+        #detail-modal.active { opacity: 1; pointer-events: auto; }
+        .detail-card-glow {
+            box-shadow: 0 0 100px rgba(79, 70, 229, 0.15);
+        }
+
+        .action-btn {
+            transition: all 0.2s ease;
+            font-size: 0.65rem;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+        }
+        .action-btn:hover { transform: translateY(-2px); }
+        .action-btn:active { transform: translateY(0); }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "three": "https://esm.sh/three@^0.182.0",
+    "@google/genai": "https://esm.sh/@google/genai"
+  }
+}
+</script>
+</head>
+<body>
+    <div id="splash-screen">
+        <div class="glass-panel p-12 rounded-[4rem] text-center max-w-xl border border-white/5 shadow-2xl scale-in">
+            <h1 class="text-5xl font-black tracking-tighter mb-6 bg-gradient-to-br from-indigo-200 via-indigo-400 to-purple-600 bg-clip-text text-transparent">ZEN TAROT</h1>
+            <p class="text-gray-500 mb-10 text-sm leading-relaxed tracking-wide font-light">在静谧的维度中，探索潜意识的指引。<br/>通过自然交互，亲手揭开命运的图案。</p>
+            <div class="flex flex-col gap-5">
+                <button id="btn-start-camera" class="px-10 py-5 bg-indigo-700 hover:bg-indigo-600 text-white rounded-[2rem] font-black tracking-[0.2em] transition-all hover:scale-105 active:scale-95 shadow-2xl shadow-indigo-900/40">
+                    感知模式 (推荐)
+                </button>
+                <button id="btn-start-mouse" class="text-[10px] text-gray-600 hover:text-indigo-400 transition uppercase tracking-[0.3em] font-bold">
+                    普通模式
+                </button>
+            </div>
+            <p id="error-message" class="text-red-500 text-[10px] mt-8 hidden uppercase tracking-widest">链接失败：请确保摄像头权限已开启</p>
+        </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <div id="detail-modal" onclick="hideDetail()">
+        <div class="glass-panel p-10 rounded-[4rem] max-w-3xl w-full mx-4 border border-white/10 detail-card-glow transform transition-all scale-95 opacity-0 group-[.active]:scale-100 group-[.active]:opacity-100" onclick="event.stopPropagation()">
+            <div class="flex flex-col md:flex-row gap-10 items-start">
+                <div id="modal-image-container" class="w-48 h-80 rounded-2xl overflow-hidden border border-white/20 shadow-2xl flex-shrink-0 bg-black">
+                    <img id="modal-card-img" src="" class="w-full h-full object-cover">
+                </div>
+                <div class="flex-1 w-full">
+                    <div class="flex items-center gap-3 mb-2">
+                        <span id="modal-card-orientation" class="text-[9px] font-black uppercase tracking-[0.3em] px-3 py-1 rounded-full"></span>
+                    </div>
+                    <h2 id="modal-card-name" class="text-4xl font-black tracking-tight mb-1 text-white"></h2>
+                    <h3 id="modal-card-name-en" class="text-xs text-indigo-400/60 uppercase tracking-widest mb-4 font-bold"></h3>
+                    
+                    <div class="mb-6">
+                        <p id="modal-card-meaning" class="text-sm text-gray-400 leading-relaxed font-light italic border-l-2 border-indigo-500/30 pl-4 py-1"></p>
+                    </div>
+
+                    <!-- AI Manifest Area -->
+                    <div id="manifest-area" class="space-y-4 pt-4 border-t border-white/5">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[9px] font-black text-indigo-300 tracking-widest uppercase">显化真实牌面 (Pro)</span>
+                            <select id="manifest-size" class="bg-indigo-950/40 text-[9px] border border-white/10 rounded-lg px-2 py-1 outline-none text-white font-bold">
+                                <option value="1K">1K High-Res</option>
+                                <option value="2K">2K Ultra-Res</option>
+                                <option value="4K">4K Masterpiece</option>
+                            </select>
+                        </div>
+                        <button id="manifest-btn" onclick="manifestCard()" class="action-btn w-full py-3 bg-indigo-700 rounded-2xl text-white shadow-lg shadow-indigo-900/40">开启真实显化</button>
+                    </div>
+
+                    <!-- AI Edit Area -->
+                    <div id="edit-area" class="hidden space-y-3 pt-4 border-t border-white/5">
+                        <div class="text-[9px] font-black text-emerald-400 tracking-widest uppercase">灵性意念编辑 (Flash)</div>
+                        <div class="relative">
+                            <input id="edit-prompt" type="text" placeholder="例如: 增加复古滤镜, 去除背景杂物..." class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-[11px] outline-none focus:border-emerald-500/50 transition-colors">
+                            <button id="edit-btn" onclick="editCard()" class="action-btn absolute right-1 top-1 bottom-1 px-4 bg-emerald-700 rounded-lg text-white">编辑</button>
+                        </div>
+                        <div class="text-[8px] text-gray-500 italic text-center">使用 Gemini 2.5 Flash Image 实时感应并重塑画面</div>
+                    </div>
+
+                    <div class="mt-8">
+                        <button onclick="hideDetail()" class="w-full px-8 py-3 bg-white/5 hover:bg-white/10 text-[10px] text-gray-400 hover:text-white uppercase tracking-[0.3em] font-black rounded-2xl transition-all border border-white/5">关闭详情</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+    <div id="debug-stats"></div>
+    
+    <div id="video-container">
+        <video id="video-feed" playsinline></video>
+    </div>
+
+    <div class="ui-overlay flex flex-col justify-between p-10">
+        <!-- Header -->
+        <div class="flex justify-between items-start">
+            <div class="glass-panel p-6 rounded-[2.5rem] max-w-xs shadow-2xl">
+                <div class="flex justify-between items-center mb-1">
+                    <h1 class="text-2xl font-black tracking-tighter bg-gradient-to-br from-indigo-200 to-indigo-500 bg-clip-text text-transparent">ZEN TAROT</h1>
+                    <button id="music-toggle-btn" onclick="toggleMusic()" class="text-gray-600 text-xl ml-4">🔇</button>
+                </div>
+                <div id="mode-status" class="text-[9px] text-indigo-500/80 uppercase tracking-[0.2em] font-black">感应中...</div>
+                
+                <div class="mt-5 flex gap-4">
+                    <div class="flex flex-col">
+                        <div class="flex gap-2">
+                            <span id="badge-OPEN" class="gesture-badge gesture-inactive">OPEN</span>
+                            <span id="badge-PINCH" class="gesture-badge gesture-inactive">PINCH</span>
+                            <span id="badge-FIST" class="gesture-badge gesture-inactive">FIST</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-panel p-4 px-6 rounded-[2rem] text-right shadow-2xl border-t border-white/5">
+                <button onclick="resetDeck()" class="text-[9px] text-gray-600 hover:text-white transition uppercase font-black tracking-[0.3em]">开启新轮</button>
+                <div id="deck-count" class="text-3xl font-light text-white mt-1 tabular-nums">0/3</div>
+            </div>
+        </div>
+
+        <!-- Center Hint -->
+        <div class="flex flex-col items-center mb-16">
+            <div id="interaction-hint" class="text-xl font-light tracking-[0.1em] text-center opacity-0 text-white/90">
+            </div>
+        </div>
+
+        <!-- Footer / Reading -->
+        <div class="flex justify-between items-end gap-12">
+            <div id="reading-panel" onclick="showCurrentDetail()" class="hidden glass-panel p-10 rounded-[3rem] max-w-lg fade-in border-t border-white/10 shadow-[0_30px_100px_rgba(0,0,0,0.8)] cursor-pointer hover:bg-white/[0.05] transition-colors">
+                <div class="flex items-center gap-4 mb-6">
+                    <span id="card-orientation" class="text-[10px] font-black uppercase tracking-[0.3em] px-4 py-1.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 shadow-inner">正位</span>
+                    <span class="text-[8px] text-white/20 uppercase tracking-widest font-black">点击查看详情</span>
+                </div>
+                <h2 id="card-name" class="text-4xl font-black tracking-tight mb-5 text-white shadow-sm">卡牌名称</h2>
+                <p id="card-meaning" class="text-base text-gray-400 leading-relaxed italic border-l-4 border-indigo-500/40 pl-6 py-2 line-clamp-3">
+                    正在感应命运的律动...
+                </p>
+                <div class="mt-10 pt-8 border-t border-white/5 flex justify-center">
+                    <div class="text-[9px] text-gray-600 uppercase tracking-[0.4em] animate-pulse font-black">
+                        握拳或右键以回归
+                    </div>
+                </div>
+            </div>
+
+            <!-- History mini-panel -->
+            <div class="glass-panel p-6 rounded-[2rem] w-48 shadow-2xl border-b border-white/5">
+                <div class="text-[9px] text-gray-600 uppercase tracking-[0.3em] font-black mb-4 border-b border-white/5 pb-2">感应日志</div>
+                <div id="history-list" class="space-y-2">
+                    <!-- History injected here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global UI handlers
+        function hideDetail() {
+            document.getElementById('detail-modal').classList.remove('active');
+            document.getElementById('detail-modal').classList.remove('group');
+        }
+        function showCurrentDetail() {
+            if (window.tarotEngine) {
+                window.tarotEngine.showCurrentCardDetail();
+            }
+        }
+        function showHistoryDetail(index) {
+            if (window.tarotEngine) {
+                window.tarotEngine.showHistoryItemDetail(index);
+            }
+        }
+        function manifestCard() {
+            if (window.tarotEngine) {
+                window.tarotEngine.manifestActiveCard();
+            }
+        }
+        function editCard() {
+            if (window.tarotEngine) {
+                window.tarotEngine.editActiveCard();
+            }
+        }
+    </script>
+    <div id="root"></div>
+    <script type="module" src="index.tsx"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "name": "ZenTarot 3D: Hand Tracker",
+  "description": "A high-fidelity 3D Tarot card experience featuring MediaPipe hand tracking, physical card interactions, and ash-disintegration effects.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
